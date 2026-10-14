@@ -1,0 +1,585 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Piano</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; background: #111; }
+  body {
+    display: flex;
+    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: none;
+  }
+  .tile {
+    flex: 1;
+    height: 100vh;
+    height: 100dvh;
+    background: var(--c);
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    align-items: center;
+    padding-bottom: 8vh;
+    gap: 0.6rem;
+    cursor: pointer;
+    color: rgba(255, 255, 255, 0.95);
+    transition: filter 0.25s ease, transform 0.25s ease;
+  }
+  .tile.active {
+    filter: brightness(1.25) saturate(1.1);
+    transform: scaleY(0.985);
+    transform-origin: top;
+    transition: filter 0.03s, transform 0.03s;
+  }
+  .note {
+    font-size: clamp(1rem, 4vw, 2.6rem);
+    font-weight: 300;
+    letter-spacing: 0.05em;
+    text-transform: lowercase;
+  }
+  .key {
+    font-size: clamp(0.65rem, 1.2vw, 0.85rem);
+    font-weight: 500;
+    opacity: 0.55;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+  }
+
+  /* Metronome */
+  .metro {
+    position: fixed;
+    top: 1.25rem;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 0.9rem;
+    padding: 0.5rem 0.9rem;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.35);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    color: #fff;
+    font-size: 0.85rem;
+    z-index: 10;
+  }
+  .metro button {
+    background: none;
+    border: none;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+    min-width: 1.8rem;
+    height: 1.8rem;
+    border-radius: 999px;
+    opacity: 0.8;
+  }
+  .metro button:hover { opacity: 1; background: rgba(255, 255, 255, 0.12); }
+  .metro .play { font-size: 0.9rem; }
+  .metro .bpm {
+    font-variant-numeric: tabular-nums;
+    min-width: 4.2rem;
+    text-align: center;
+    letter-spacing: 0.05em;
+  }
+  .metro .bpm small { opacity: 0.55; font-size: 0.7rem; margin-left: 0.2rem; }
+  .dots { display: flex; gap: 0.4rem; }
+  .dot {
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.25);
+    transition: background 0.15s, transform 0.15s;
+  }
+  .dot.on { background: #fff; transform: scale(1.35); transition: none; }
+  .dot.accent.on { background: #fff; transform: scale(1.7); }
+  .metro { flex-wrap: wrap; justify-content: center; max-width: calc(100% - 32px); }
+  .sep { width: 1px; height: 1.1rem; background: rgba(255, 255, 255, 0.25); }
+  .metro select {
+    background: none;
+    border: none;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+    opacity: 0.85;
+    outline: none;
+  }
+  .metro select option { background: #222; color: #fff; }
+  .metro .demo { padding: 0 0.6rem; }
+  .drums .note { font-size: clamp(0.7rem, 1.8vw, 1.3rem); text-align: center; padding: 0 0.3rem; }
+  .metro .demo.on { background: rgba(255, 255, 255, 0.2); opacity: 1; }
+</style>
+</head>
+<body>
+<div class="metro">
+  <button class="play" title="Start / stop (space)">▶</button>
+  <button class="minus" title="Slower (↓)">−</button>
+  <span class="bpm"><span class="bpm-val">90</span><small>bpm</small></span>
+  <button class="plus" title="Faster (↑)">+</button>
+  <div class="dots"></div>
+  <button class="sig" title="Beats per bar">4/4</button>
+  <span class="sep"></span>
+  <select class="song" title="Demo song"></select>
+  <button class="demo" title="Play / stop demo (Esc to stop)">♪ demo</button>
+  <span class="sep"></span>
+  <select class="instrument" title="Instrument"></select>
+</div>
+<script>
+  const NOTES = [
+    { name: "do",  key: "a", freq: 261.63, color: "#e5484d" },
+    { name: "ré",  key: "s", freq: 293.66, color: "#f76b15" },
+    { name: "mi",  key: "d", freq: 329.63, color: "#ffc53d" },
+    { name: "fa",  key: "f", freq: 349.23, color: "#46a758" },
+    { name: "sol", key: "g", freq: 392.00, color: "#12a594" },
+    { name: "la",  key: "h", freq: 440.00, color: "#0090ff" },
+    { name: "si",  key: "j", freq: 493.88, color: "#6e56cf" },
+    { name: "do",  key: "k", freq: 523.25, color: "#d6409f" },
+  ];
+
+  let ctx, master, noise;
+  function audio() {
+    if (!ctx) {
+      ctx = new (window.AudioContext || window.webkitAudioContext)();
+      // A light compressor keeps chords and drum hits from clipping.
+      master = ctx.createDynamicsCompressor();
+      master.connect(ctx.destination);
+      noise = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
+      const d = noise.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    }
+    if (ctx.state === "suspended") ctx.resume();
+    return ctx;
+  }
+
+  // Envelope gain node: quick attack to `peak`, exponential fade to silence at `end`.
+  function env(ac, t, peak, attack, end) {
+    const g = ac.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(peak, t + attack);
+    g.gain.exponentialRampToValueAtTime(0.0001, end);
+    g.connect(master);
+    return g;
+  }
+
+  function noiseSource(ac, t, dur) {
+    const src = ac.createBufferSource();
+    src.buffer = noise;
+    src.start(t);
+    src.stop(t + dur);
+    return src;
+  }
+
+  function filter(ac, type, freq, q = 1) {
+    const f = ac.createBiquadFilter();
+    f.type = type;
+    f.frequency.value = freq;
+    f.Q.value = q;
+    return f;
+  }
+
+  // Soft piano-like tone: a few harmonics with a quick attack and exponential decay.
+  function piano(ac, freq, t) {
+    const out = env(ac, t, 0.35, 0.005, t + 1.8);
+    [[1, 1, "triangle"], [2, 0.3, "sine"], [3, 0.12, "sine"]].forEach(([mult, amp, type]) => {
+      const osc = ac.createOscillator();
+      const g = ac.createGain();
+      osc.type = type;
+      osc.frequency.value = freq * mult;
+      g.gain.value = amp;
+      osc.connect(g).connect(out);
+      osc.start(t);
+      osc.stop(t + 1.9);
+    });
+  }
+
+  // Plucked string (Karplus–Strong): a burst of noise fed through a decaying delay line.
+  const guitarCache = {};
+  function guitar(ac, freq, t) {
+    if (!guitarCache[freq]) {
+      const sr = ac.sampleRate;
+      const buf = ac.createBuffer(1, sr * 2.5, sr);
+      const y = buf.getChannelData(0);
+      const n = Math.round(sr / freq - 0.5);
+      for (let i = 0; i < n; i++) y[i] = Math.random() * 2 - 1;
+      for (let i = n; i < y.length; i++) y[i] = 0.996 * 0.5 * (y[i - n] + (i > n ? y[i - n - 1] : 0));
+      guitarCache[freq] = buf;
+    }
+    const src = ac.createBufferSource();
+    src.buffer = guitarCache[freq];
+    src.connect(filter(ac, "lowpass", 3500)).connect(env(ac, t, 0.5, 0.003, t + 2.4));
+    src.start(t);
+  }
+
+  // Flute: near-sine tone with gentle vibrato and a breathy noise layer.
+  function flute(ac, freq, t, dur) {
+    const end = t + Math.max(dur, 0.15) + 0.15;
+    const out = ac.createGain();
+    out.gain.setValueAtTime(0.0001, t);
+    out.gain.exponentialRampToValueAtTime(0.3, t + 0.06);
+    out.gain.setValueAtTime(0.3, end - 0.15);
+    out.gain.exponentialRampToValueAtTime(0.0001, end);
+    out.connect(master);
+
+    const osc = ac.createOscillator();
+    osc.type = "sine";
+    osc.frequency.value = freq;
+    const lfo = ac.createOscillator();
+    const depth = ac.createGain();
+    lfo.frequency.value = 5;
+    depth.gain.setValueAtTime(0, t);
+    depth.gain.linearRampToValueAtTime(freq * 0.006, t + 0.3);
+    lfo.connect(depth).connect(osc.frequency);
+    const h2 = ac.createOscillator();
+    const h2g = ac.createGain();
+    h2.frequency.value = freq * 2;
+    h2g.gain.value = 0.08;
+    osc.connect(out);
+    h2.connect(h2g).connect(out);
+
+    const breath = ac.createGain();
+    breath.gain.value = 0.05;
+    noiseSource(ac, t, end - t).connect(filter(ac, "bandpass", freq * 2, 2)).connect(breath).connect(out);
+
+    [osc, lfo, h2].forEach((o) => { o.start(t); o.stop(end); });
+  }
+
+  // Drum kit: each tile is a different drum, synthesized from oscillators and noise.
+  function drum(ac, i, t) {
+    const tone = (from, to, decay, peak) => {
+      const osc = ac.createOscillator();
+      osc.frequency.setValueAtTime(from, t);
+      osc.frequency.exponentialRampToValueAtTime(to, t + decay * 0.5);
+      osc.connect(env(ac, t, peak, 0.002, t + decay));
+      osc.start(t);
+      osc.stop(t + decay);
+    };
+    const hiss = (type, freq, decay, peak, q) =>
+      noiseSource(ac, t, decay).connect(filter(ac, type, freq, q)).connect(env(ac, t, peak, 0.002, t + decay));
+
+    switch (i) {
+      case 0: tone(150, 40, 0.45, 1); break;                                   // grosse caisse
+      case 1: hiss("highpass", 1200, 0.2, 0.6); tone(200, 160, 0.12, 0.4); break; // caisse claire
+      case 2: hiss("highpass", 7500, 0.05, 0.35); break;                       // charley fermé
+      case 3: hiss("highpass", 7000, 0.35, 0.3); break;                        // charley ouvert
+      case 4: tone(120, 75, 0.45, 0.8); break;                                 // tom grave
+      case 5: tone(220, 150, 0.35, 0.7); break;                                // tom aigu
+      case 6:                                                                  // clap
+        [0, 0.01, 0.02].forEach((o) =>
+          noiseSource(ac, t + o, 0.02).connect(filter(ac, "bandpass", 1500, 1.5)).connect(env(ac, t + o, 0.5, 0.001, t + o + 0.02))
+        );
+        hiss("bandpass", 1500, 0.2, 0.4, 1.5);
+        break;
+      case 7: hiss("highpass", 5000, 1.6, 0.3); break;                         // cymbale
+    }
+  }
+
+  const INSTRUMENTS = {
+    piano: { label: "piano" },
+    guitare: { label: "guitare" },
+    flute: { label: "flûte" },
+    batterie: { label: "batterie" },
+  };
+  const DRUMS = ["grosse caisse", "caisse claire", "charley", "charley ouvert", "tom grave", "tom aigu", "clap", "cymbale"];
+  let instrument = "piano";
+
+  // Play tile `i` with the current instrument, now or at audio time `when`.
+  function play(i, when, dur = 0.6) {
+    const ac = audio();
+    const t = when ?? ac.currentTime;
+    const freq = NOTES[i].freq;
+    if (instrument === "guitare") guitar(ac, freq, t);
+    else if (instrument === "flute") flute(ac, freq, t, dur);
+    else if (instrument === "batterie") drum(ac, i, t);
+    else piano(ac, freq, t);
+  }
+
+  const tiles = NOTES.map((n, i) => {
+    const el = document.createElement("div");
+    el.className = "tile";
+    el.style.setProperty("--c", n.color);
+    el.innerHTML = `<span class="note">${n.name}</span><span class="key">${n.key} · ${i + 1}</span>`;
+    el.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      trigger(i);
+    });
+    el.addEventListener("pointerup", () => el.classList.remove("active"));
+    el.addEventListener("pointerleave", () => el.classList.remove("active"));
+    document.body.appendChild(el);
+    return el;
+  });
+
+  function trigger(i) {
+    play(i);
+    tiles[i].classList.add("active");
+  }
+
+  function setInstrument(name) {
+    instrument = name;
+    document.body.classList.toggle("drums", name === "batterie");
+    tiles.forEach((el, i) => {
+      el.querySelector(".note").textContent = name === "batterie" ? DRUMS[i] : NOTES[i].name;
+    });
+  }
+
+  // Letters (A–K) and numbers (1–8, top row or numpad) both play the notes.
+  const byKey = {};
+  NOTES.forEach((n, i) => {
+    byKey[n.key] = i;
+    byKey[String(i + 1)] = i;
+  });
+  window.addEventListener("keydown", (e) => {
+    const i = byKey[e.key.toLowerCase()];
+    if (i === undefined || e.repeat) return;
+    trigger(i);
+  });
+  window.addEventListener("keyup", (e) => {
+    const i = byKey[e.key.toLowerCase()];
+    if (i !== undefined) tiles[i].classList.remove("active");
+  });
+
+  // ---- Metronome ----
+  // Clicks are scheduled ahead on the audio clock for steady timing;
+  // the dots follow the same clock via requestAnimationFrame.
+  const metro = {
+    bpm: 90,
+    beats: 4,
+    running: false,
+    nextTime: 0,
+    beat: 0,
+    timer: null,
+    queue: [],
+  };
+  const SIGS = [2, 3, 4, 6];
+  const $ = (s) => document.querySelector(s);
+  const playBtn = $(".metro .play");
+  const bpmVal = $(".metro .bpm-val");
+  const sigBtn = $(".metro .sig");
+  const dotsEl = $(".dots");
+
+  function renderDots() {
+    dotsEl.innerHTML = "";
+    for (let i = 0; i < metro.beats; i++) {
+      const d = document.createElement("span");
+      d.className = "dot" + (i === 0 ? " accent" : "");
+      dotsEl.appendChild(d);
+    }
+  }
+
+  function click(time, accent) {
+    const ac = audio();
+    const osc = ac.createOscillator();
+    const g = ac.createGain();
+    osc.type = "sine";
+    osc.frequency.value = accent ? 1500 : 1000;
+    g.gain.setValueAtTime(0.0001, time);
+    g.gain.exponentialRampToValueAtTime(accent ? 0.4 : 0.25, time + 0.002);
+    g.gain.exponentialRampToValueAtTime(0.0001, time + 0.05);
+    osc.connect(g).connect(ac.destination);
+    osc.start(time);
+    osc.stop(time + 0.06);
+  }
+
+  function schedule() {
+    const ac = audio();
+    while (metro.nextTime < ac.currentTime + 0.1) {
+      click(metro.nextTime, metro.beat === 0);
+      metro.queue.push({ beat: metro.beat, time: metro.nextTime });
+      metro.nextTime += 60 / metro.bpm;
+      metro.beat = (metro.beat + 1) % metro.beats;
+    }
+  }
+
+  function draw() {
+    if (!metro.running) return;
+    const now = ctx.currentTime;
+    let current = null;
+    while (metro.queue.length && metro.queue[0].time <= now) {
+      current = metro.queue.shift();
+    }
+    if (current) {
+      [...dotsEl.children].forEach((d, i) => d.classList.toggle("on", i === current.beat));
+      setTimeout(() => dotsEl.children[current.beat]?.classList.remove("on"), 100);
+    }
+    requestAnimationFrame(draw);
+  }
+
+  function start(at) {
+    const ac = audio();
+    metro.running = true;
+    metro.beat = 0;
+    metro.queue = [];
+    metro.nextTime = at ?? ac.currentTime + 0.05;
+    schedule();
+    metro.timer = setInterval(schedule, 25);
+    playBtn.textContent = "■";
+    requestAnimationFrame(draw);
+  }
+
+  function stop() {
+    metro.running = false;
+    clearInterval(metro.timer);
+    playBtn.textContent = "▶";
+    [...dotsEl.children].forEach((d) => d.classList.remove("on"));
+  }
+
+  function setBpm(v) {
+    metro.bpm = Math.max(30, Math.min(240, v));
+    bpmVal.textContent = metro.bpm;
+  }
+
+  playBtn.addEventListener("click", () => (metro.running ? stop() : start()));  $(".metro .minus").addEventListener("click", () => setBpm(metro.bpm - 5));
+  $(".metro .plus").addEventListener("click", () => setBpm(metro.bpm + 5));
+  sigBtn.addEventListener("click", () => {
+    metro.beats = SIGS[(SIGS.indexOf(metro.beats) + 1) % SIGS.length];
+    sigBtn.textContent = `${metro.beats}/4`;
+    renderDots();
+    if (metro.running) { stop(); start(); }
+  });
+  // Keep buttons from stealing focus so space never re-clicks them.
+  document.querySelectorAll(".metro button").forEach((b) =>
+    b.addEventListener("mousedown", (e) => e.preventDefault())
+  );
+
+  window.addEventListener("keydown", (e) => {
+    if (e.code === "Space") {
+      e.preventDefault();
+      if (!e.repeat) metro.running ? stop() : start();
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setBpm(metro.bpm + (e.shiftKey ? 1 : 5));
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setBpm(metro.bpm - (e.shiftKey ? 1 : 5));
+    }
+  });
+
+  renderDots();
+
+  // ---- Demo songs ----
+  // Each note is "name:beats"; DO is the high do, "-" is a rest.
+  const SONGS = [
+    {
+      title: "Vive le vent",
+      bpm: 160,
+      notes:
+        "mi:1 mi:1 mi:2 mi:1 mi:1 mi:2 mi:1 sol:1 do:1.5 re:.5 mi:4 " +
+        "fa:1 fa:1 fa:1.5 fa:.5 fa:1 mi:1 mi:1 mi:.5 mi:.5 mi:1 re:1 re:1 mi:1 re:2 sol:2 " +
+        "mi:1 mi:1 mi:2 mi:1 mi:1 mi:2 mi:1 sol:1 do:1.5 re:.5 mi:4 " +
+        "fa:1 fa:1 fa:1.5 fa:.5 fa:1 mi:1 mi:1 mi:.5 mi:.5 sol:1 sol:1 fa:1 re:1 do:4",
+    },
+    {
+      title: "Au clair de la lune",
+      bpm: 110,
+      notes:
+        "do:1 do:1 do:1 re:1 mi:2 re:2 do:1 mi:1 re:1 re:1 do:4 " +
+        "do:1 do:1 do:1 re:1 mi:2 re:2 do:1 mi:1 re:1 re:1 do:4",
+    },
+    {
+      title: "Ah ! vous dirai-je, maman",
+      bpm: 110,
+      notes:
+        "do:1 do:1 sol:1 sol:1 la:1 la:1 sol:2 fa:1 fa:1 mi:1 mi:1 re:1 re:1 do:2 " +
+        "sol:1 sol:1 fa:1 fa:1 mi:1 mi:1 re:2 sol:1 sol:1 fa:1 fa:1 mi:1 mi:1 re:2 " +
+        "do:1 do:1 sol:1 sol:1 la:1 la:1 sol:2 fa:1 fa:1 mi:1 mi:1 re:1 re:1 do:2",
+    },
+    {
+      title: "Ode à la joie",
+      bpm: 120,
+      notes:
+        "mi:1 mi:1 fa:1 sol:1 sol:1 fa:1 mi:1 re:1 do:1 do:1 re:1 mi:1 mi:1.5 re:.5 re:2 " +
+        "mi:1 mi:1 fa:1 sol:1 sol:1 fa:1 mi:1 re:1 do:1 do:1 re:1 mi:1 re:1.5 do:.5 do:2",
+    },
+  ];
+  const INDEX = { do: 0, re: 1, mi: 2, fa: 3, sol: 4, la: 5, si: 6, DO: 7, "-": -1 };
+  SONGS.forEach((s) => {
+    s.seq = s.notes.split(/\s+/).map((t) => {
+      const [n, d] = t.split(":");
+      return { i: INDEX[n], beats: parseFloat(d) };
+    });
+  });
+
+  const songSel = $(".metro .song");
+  const demoBtn = $(".metro .demo");
+  SONGS.forEach((s, i) => songSel.add(new Option(s.title, i)));
+
+  const demo = { running: false, song: null, idx: 0, nextTime: 0, timer: null, timeouts: [] };
+
+  // Light up a tile in sync with a note scheduled on the audio clock.
+  function flash(i, when, dur) {
+    const delay = Math.max(0, (when - ctx.currentTime) * 1000);
+    demo.timeouts.push(
+      setTimeout(() => tiles[i].classList.add("active"), delay),
+      setTimeout(() => tiles[i].classList.remove("active"), delay + dur * 1000 * 0.8)
+    );
+  }
+
+  function demoSchedule() {
+    const ac = audio();
+    while (demo.running && demo.nextTime < ac.currentTime + 0.1) {
+      const note = demo.song.seq[demo.idx];
+      if (!note) {
+        // Song finished: stop once the last note has had time to ring.
+        const left = Math.max(0, (demo.nextTime - ac.currentTime) * 1000);
+        demo.timeouts.push(setTimeout(stopDemo, left));
+        clearInterval(demo.timer);
+        return;
+      }
+      const dur = (note.beats * 60) / metro.bpm;
+      if (note.i >= 0) {
+        play(note.i, demo.nextTime, dur * 0.9);
+        flash(note.i, demo.nextTime, dur);
+      }
+      demo.nextTime += dur;
+      demo.idx++;
+    }
+  }
+
+  function startDemo() {
+    const ac = audio();
+    demo.song = SONGS[songSel.value];
+    demo.running = true;
+    demo.idx = 0;
+    demo.nextTime = ac.currentTime + 0.1;
+    // Keep the metronome on the same downbeat if it is running.
+    if (metro.running) { stop(); start(demo.nextTime); }
+    demoSchedule();
+    demo.timer = setInterval(demoSchedule, 25);
+    demoBtn.classList.add("on");
+    demoBtn.textContent = "■ stop";
+  }
+
+  function stopDemo() {
+    demo.running = false;
+    clearInterval(demo.timer);
+    demo.timeouts.forEach(clearTimeout);
+    demo.timeouts = [];
+    tiles.forEach((t) => t.classList.remove("active"));
+    demoBtn.classList.remove("on");
+    demoBtn.textContent = "♪ demo";
+  }
+
+  songSel.addEventListener("change", () => {
+    setBpm(SONGS[songSel.value].bpm);
+    if (demo.running) { stopDemo(); startDemo(); }
+    songSel.blur();
+  });
+  demoBtn.addEventListener("click", () => (demo.running ? stopDemo() : startDemo()));
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && demo.running) stopDemo();
+  });
+
+  setBpm(SONGS[0].bpm);
+
+  const instSel = $(".metro .instrument");
+  Object.entries(INSTRUMENTS).forEach(([k, v]) => instSel.add(new Option(v.label, k)));
+  instSel.addEventListener("change", () => {
+    setInstrument(instSel.value);
+    instSel.blur();
+  });
+</script>
+</body>
+</html>
