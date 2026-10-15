@@ -13,7 +13,10 @@ Open `index.html` in any modern browser. Nothing to install, no build step, no a
 - **8 tiles**, from *do* to the next *do*. Click or tap them, or use the keyboard.
 - **4 instruments**: piano, guitare, flûte and batterie (each tile becomes a drum).
 - **Metronome** with adjustable tempo and 2/4, 3/4, 4/4 or 6/4 time.
-- **Demo mode**: pick a song and watch the tiles light up as it plays.
+- **Rhythm timeline**: pick a song and its notes fall down their tile's column. Play each one when it reaches the line; a long block means a long note.
+  - **♪ écouter**: the piano plays the song by itself, so you can hear how it goes.
+  - **★ jouer**: you play it. The metronome counts in one bar, each good note shows *parfait !* or *bien*, and you get a score at the end.
+- **Songs**:
   - Vive le vent
   - Au clair de la lune
   - Ah ! vous dirai-je, maman
@@ -29,7 +32,7 @@ Open `index.html` in any modern browser. Nothing to install, no build step, no a
 |-----|--------|
 | Space | Start / stop the metronome |
 | ↑ / ↓ | Tempo +5 / −5 (hold Shift for ±1) |
-| Esc | Stop the demo |
+| Esc | Stop the song |
 
 ## Add a song
 

@@ -109,9 +109,33 @@
     outline: none;
   }
   .metro select option { background: #222; color: #fff; }
-  .metro .demo { padding: 0 0.6rem; }
+  .metro .listen, .metro .practice { padding: 0 0.6rem; }
+  .metro .on { background: rgba(255, 255, 255, 0.2); opacity: 1; }
+  .timeline { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 5; }
+  .score {
+    position: fixed;
+    top: 40%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(0.9);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 1.2rem 2rem;
+    border-radius: 1.2rem;
+    background: rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    color: #fff;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s, transform 0.3s;
+    z-index: 20;
+  }
+  .score.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  .score b { font-size: 2rem; font-weight: 600; }
+  .score span { font-size: 1rem; opacity: 0.85; }
   .drums .note { font-size: clamp(0.7rem, 1.8vw, 1.3rem); text-align: center; padding: 0 0.3rem; }
-  .metro .demo.on { background: rgba(255, 255, 255, 0.2); opacity: 1; }
 </style>
 </head>
 <body>
@@ -124,10 +148,13 @@
   <button class="sig" title="Beats per bar">4/4</button>
   <span class="sep"></span>
   <select class="song" title="Demo song"></select>
-  <button class="demo" title="Play / stop demo (Esc to stop)">♪ demo</button>
+  <button class="listen" title="Écouter la chanson (Esc pour arrêter)">♪ écouter</button>
+  <button class="practice" title="Jouer la chanson en rythme (Esc pour arrêter)">★ jouer</button>
   <span class="sep"></span>
   <select class="instrument" title="Instrument"></select>
 </div>
+<canvas class="timeline" hidden></canvas>
+<div class="score"></div>
 <script>
   const NOTES = [
     { name: "do",  key: "a", freq: 261.63, color: "#e5484d" },
@@ -315,6 +342,7 @@
   function trigger(i) {
     play(i);
     tiles[i].classList.add("active");
+    judge(i);
   }
 
   function setInstrument(name) {
@@ -429,6 +457,7 @@
   function setBpm(v) {
     metro.bpm = Math.max(30, Math.min(240, v));
     bpmVal.textContent = metro.bpm;
+    retime();
   }
 
   playBtn.addEventListener("click", () => (metro.running ? stop() : start()));  $(".metro .minus").addEventListener("click", () => setBpm(metro.bpm - 5));
@@ -496,80 +525,225 @@
   ];
   const INDEX = { do: 0, re: 1, mi: 2, fa: 3, sol: 4, la: 5, si: 6, DO: 7, "-": -1 };
   SONGS.forEach((s) => {
+    let beat = 0;
     s.seq = s.notes.split(/\s+/).map((t) => {
       const [n, d] = t.split(":");
-      return { i: INDEX[n], beats: parseFloat(d) };
+      const note = { i: INDEX[n], beats: parseFloat(d), start: beat };
+      beat += note.beats;
+      return note;
     });
+    s.length = beat;
   });
 
+  // ---- Song player ----
+  // "écouter" plays the song by itself; "jouer" lets her play it.
+  // Both show a timeline: notes fall down their tile's column and should be
+  // played when they reach the line. A block's length is the note's length.
   const songSel = $(".metro .song");
-  const demoBtn = $(".metro .demo");
+  const listenBtn = $(".metro .listen");
+  const practiceBtn = $(".metro .practice");
+  const scoreEl = $(".score");
+  const canvas = $(".timeline");
+  const g = canvas.getContext("2d");
   SONGS.forEach((s, i) => songSel.add(new Option(s.title, i)));
 
-  const demo = { running: false, song: null, idx: 0, nextTime: 0, timer: null, timeouts: [] };
+  const LOOKAHEAD = 4;   // beats visible above the line
+  const WINDOW = 0.2;    // seconds early/late that still count as a hit
+  const PERFECT = 0.08;
+
+  // Position in the song is tracked in beats, anchored to the audio clock,
+  // so changing the tempo mid-song keeps everything in place.
+  const song = { mode: null, notes: [], end: 0, idx: 0, bpm: 90, anchorTime: 0, anchorBeat: 0,
+                 timer: null, timeouts: [], ownMetro: false, score: 0, popups: [] };
+  const beatAt = (t) => song.anchorBeat + ((t - song.anchorTime) * song.bpm) / 60;
+  const timeAt = (b) => song.anchorTime + ((b - song.anchorBeat) * 60) / song.bpm;
+
+  function retime() {
+    if (!song.mode) return;
+    const now = ctx.currentTime;
+    song.anchorBeat = beatAt(now);
+    song.anchorTime = now;
+    song.bpm = metro.bpm;
+  }
 
   // Light up a tile in sync with a note scheduled on the audio clock.
   function flash(i, when, dur) {
     const delay = Math.max(0, (when - ctx.currentTime) * 1000);
-    demo.timeouts.push(
+    song.timeouts.push(
       setTimeout(() => tiles[i].classList.add("active"), delay),
       setTimeout(() => tiles[i].classList.remove("active"), delay + dur * 1000 * 0.8)
     );
   }
 
-  function demoSchedule() {
-    const ac = audio();
-    while (demo.running && demo.nextTime < ac.currentTime + 0.1) {
-      const note = demo.song.seq[demo.idx];
-      if (!note) {
-        // Song finished: stop once the last note has had time to ring.
-        const left = Math.max(0, (demo.nextTime - ac.currentTime) * 1000);
-        demo.timeouts.push(setTimeout(stopDemo, left));
-        clearInterval(demo.timer);
-        return;
+  function songTick() {
+    const now = ctx.currentTime;
+    if (song.mode === "listen") {
+      while (song.idx < song.notes.length && timeAt(song.notes[song.idx].start) < now + 0.1) {
+        const n = song.notes[song.idx++];
+        const t = timeAt(n.start);
+        const dur = (n.beats * 60) / song.bpm;
+        play(n.i, t, dur * 0.9);
+        flash(n.i, t, dur);
       }
-      const dur = (note.beats * 60) / metro.bpm;
-      if (note.i >= 0) {
-        play(note.i, demo.nextTime, dur * 0.9);
-        flash(note.i, demo.nextTime, dur);
-      }
-      demo.nextTime += dur;
-      demo.idx++;
+    }
+    if (beatAt(now) > song.end + 1) stopSong(true);
+  }
+
+  // Called on every tile press: in practice mode, match it to the closest note.
+  function judge(i) {
+    if (song.mode !== "practice") return;
+    const now = ctx.currentTime;
+    let best = null;
+    let bestDt = Infinity;
+    for (const n of song.notes) {
+      if (n.i !== i || n.hit || n.missed) continue;
+      const dt = Math.abs(timeAt(n.start) - now);
+      if (dt < bestDt) { best = n; bestDt = dt; }
+    }
+    if (best && bestDt <= WINDOW) {
+      best.hit = true;
+      song.score++;
+      song.popups.push({ i, text: bestDt <= PERFECT ? "parfait !" : "bien", t: now });
     }
   }
 
-  function startDemo() {
-    const ac = audio();
-    demo.song = SONGS[songSel.value];
-    demo.running = true;
-    demo.idx = 0;
-    demo.nextTime = ac.currentTime + 0.1;
-    // Keep the metronome on the same downbeat if it is running.
-    if (metro.running) { stop(); start(demo.nextTime); }
-    demoSchedule();
-    demo.timer = setInterval(demoSchedule, 25);
-    demoBtn.classList.add("on");
-    demoBtn.textContent = "■ stop";
+  function draw() {
+    if (!song.mode) return;
+    const W = innerWidth;
+    const H = innerHeight;
+    const dpr = devicePixelRatio || 1;
+    if (canvas.width !== Math.round(W * dpr) || canvas.height !== Math.round(H * dpr)) {
+      canvas.width = Math.round(W * dpr);
+      canvas.height = Math.round(H * dpr);
+    }
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, W, H);
+
+    const now = ctx.currentTime;
+    const beat = beatAt(now);
+    const hitY = H * 0.62;
+    const ppb = hitY / LOOKAHEAD;
+    const col = W / NOTES.length;
+
+    if (song.mode === "practice") {
+      for (const n of song.notes) {
+        if (!n.hit && !n.missed && now - timeAt(n.start) > WINDOW) n.missed = true;
+      }
+    }
+
+    g.save();
+    g.beginPath();
+    g.rect(0, 0, W, hitY);
+    g.clip();
+
+    // Faint bar lines help read the rhythm.
+    g.fillStyle = "rgba(255, 255, 255, 0.18)";
+    const first = Math.ceil(beat / metro.beats) * metro.beats;
+    for (let b = first; b < beat + LOOKAHEAD; b += metro.beats) {
+      g.fillRect(0, hitY - (b - beat) * ppb, W, 1);
+    }
+
+    for (const n of song.notes) {
+      const bottom = hitY - (n.start - beat) * ppb;
+      const top = bottom - n.beats * ppb + 4;
+      if (bottom < 0 || top > hitY) continue;
+      const x = n.i * col + col * 0.18;
+      const w = col * 0.64;
+      g.fillStyle = n.missed ? "rgba(255, 255, 255, 0.3)" : "rgba(255, 255, 255, 0.9)";
+      g.shadowColor = "rgba(255, 255, 255, 0.9)";
+      g.shadowBlur = n.hit ? 18 : 0;
+      g.beginPath();
+      if (g.roundRect) g.roundRect(x, top, w, bottom - top, 8);
+      else g.rect(x, top, w, bottom - top);
+      g.fill();
+    }
+    g.restore();
+
+    g.fillStyle = "rgba(255, 255, 255, 0.8)";
+    g.fillRect(0, hitY - 1, W, 2);
+
+    // "parfait !" / "bien" pop just under the line, on the tile's color, and fade.
+    g.textAlign = "center";
+    g.font = "600 16px -apple-system, BlinkMacSystemFont, sans-serif";
+    g.shadowColor = "rgba(0, 0, 0, 0.35)";
+    g.shadowBlur = 4;
+    song.popups = song.popups.filter((p) => now - p.t < 0.8);
+    for (const p of song.popups) {
+      const age = (now - p.t) / 0.8;
+      g.fillStyle = `rgba(255, 255, 255, ${1 - age})`;
+      g.fillText(p.text, (p.i + 0.5) * col, hitY + 36 + age * 16);
+    }
+    g.shadowBlur = 0;
+
+    requestAnimationFrame(draw);
   }
 
-  function stopDemo() {
-    demo.running = false;
-    clearInterval(demo.timer);
-    demo.timeouts.forEach(clearTimeout);
-    demo.timeouts = [];
+  function setButtons() {
+    listenBtn.classList.toggle("on", song.mode === "listen");
+    practiceBtn.classList.toggle("on", song.mode === "practice");
+    listenBtn.textContent = song.mode === "listen" ? "■ stop" : "♪ écouter";
+    practiceBtn.textContent = song.mode === "practice" ? "■ stop" : "★ jouer";
+  }
+
+  function startSong(mode) {
+    stopSong();
+    const ac = audio();
+    const data = SONGS[songSel.value];
+    song.mode = mode;
+    song.notes = data.seq.filter((n) => n.i >= 0).map((n) => ({ ...n }));
+    song.end = data.length;
+    song.idx = 0;
+    song.score = 0;
+    song.popups = [];
+    song.bpm = metro.bpm;
+    // One bar of count-in so the first notes can be seen coming.
+    song.anchorBeat = -metro.beats;
+    song.anchorTime = ac.currentTime + 0.1;
+    // The metronome counts in and keeps time; it always plays in practice mode.
+    if (metro.running) { stop(); start(song.anchorTime); }
+    else if (mode === "practice") { start(song.anchorTime); song.ownMetro = true; }
+    scoreEl.classList.remove("show");
+    canvas.hidden = false;
+    song.timer = setInterval(songTick, 25);
+    songTick();
+    setButtons();
+    requestAnimationFrame(draw);
+  }
+
+  function stopSong(finished) {
+    if (!song.mode) return;
+    const wasPractice = song.mode === "practice";
+    song.mode = null;
+    clearInterval(song.timer);
+    song.timeouts.forEach(clearTimeout);
+    song.timeouts = [];
     tiles.forEach((t) => t.classList.remove("active"));
-    demoBtn.classList.remove("on");
-    demoBtn.textContent = "♪ demo";
+    if (song.ownMetro) { stop(); song.ownMetro = false; }
+    g.clearRect(0, 0, canvas.width, canvas.height);
+    canvas.hidden = true;
+    setButtons();
+    if (finished && wasPractice) showScore();
+  }
+
+  function showScore() {
+    const total = song.notes.length;
+    const ratio = song.score / total;
+    const msg = ratio >= 0.9 ? "Bravo !" : ratio >= 0.6 ? "Très bien !" : "Continue !";
+    scoreEl.innerHTML = `<b>★ ${song.score} / ${total}</b><span>${msg}</span>`;
+    scoreEl.classList.add("show");
+    clearTimeout(showScore.t);
+    showScore.t = setTimeout(() => scoreEl.classList.remove("show"), 4000);
   }
 
   songSel.addEventListener("change", () => {
     setBpm(SONGS[songSel.value].bpm);
-    if (demo.running) { stopDemo(); startDemo(); }
+    if (song.mode) startSong(song.mode);
     songSel.blur();
   });
-  demoBtn.addEventListener("click", () => (demo.running ? stopDemo() : startDemo()));
+  listenBtn.addEventListener("click", () => (song.mode === "listen" ? stopSong() : startSong("listen")));
+  practiceBtn.addEventListener("click", () => (song.mode === "practice" ? stopSong() : startSong("practice")));
   window.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && demo.running) stopDemo();
+    if (e.key === "Escape") stopSong();
   });
 
   setBpm(SONGS[0].bpm);
