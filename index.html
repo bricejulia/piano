@@ -153,10 +153,13 @@
   .score.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
   .score b { font-size: 2rem; font-weight: 600; }
   .score span { font-size: 1rem; opacity: 0.85; }
-  .drums .note { font-size: clamp(0.7rem, 1.8vw, 1.3rem); text-align: center; padding: 0 0.3rem; }
+  .labeled .note { font-size: clamp(0.7rem, 1.8vw, 1.3rem); text-align: center; padding: 0 0.3rem; line-height: 1.3; }
+  .note .emoji { display: block; font-size: 2.4em; line-height: 1.2; }
 
-  /* Touch screens: much bigger controls for small fingers, and no keyboard hints. */
-  @media (any-pointer: coarse) {
+  /* Touch screens: no keyboard hints. */
+  @media (any-pointer: coarse) { .key { display: none; } }
+  /* Tablets (touch + tall enough): much bigger controls for small fingers. Phones keep 44px. */
+  @media (any-pointer: coarse) and (min-height: 500px) {
     .metro { gap: 12px; }
     .group { gap: 8px; padding: 8px 12px; font-size: 22px; }
     .metro button, .metro select { min-width: 64px; height: 64px; }
@@ -167,9 +170,8 @@
     .metro .listen, .metro .practice { padding: 0 20px; }
     .dots { gap: 9px; padding: 0 8px; }
     .dot { width: 13px; height: 13px; }
-    .key { display: none; }
     .note { font-size: clamp(1.4rem, 4.5vw, 3.2rem); }
-    .drums .note { font-size: clamp(0.9rem, 2.2vw, 1.6rem); }
+    .labeled .note { font-size: clamp(0.9rem, 2.2vw, 1.6rem); }
     .score b { font-size: 3rem; }
     .score span { font-size: 1.4rem; }
   }
@@ -346,24 +348,174 @@
     }
   }
 
+  // Envelope for held notes: attack, hold for `dur`, short release. Returns the output node and end time.
+  function held(ac, t, dur, peak, attack) {
+    const end = t + Math.max(dur, 0.2) + 0.15;
+    const out = ac.createGain();
+    out.gain.setValueAtTime(0.0001, t);
+    out.gain.exponentialRampToValueAtTime(peak, t + attack);
+    out.gain.setValueAtTime(peak, end - 0.15);
+    out.gain.exponentialRampToValueAtTime(0.0001, end);
+    out.connect(master);
+    return { out, end };
+  }
+
+  // Wobble an oscillator's pitch by `depth` Hz, fading in over `delay` seconds.
+  function vibrato(ac, osc, t, end, rate, depth, delay) {
+    const lfo = ac.createOscillator();
+    const g = ac.createGain();
+    lfo.frequency.value = rate;
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(depth, t + delay);
+    lfo.connect(g).connect(osc.frequency);
+    lfo.start(t);
+    lfo.stop(end);
+  }
+
+  // Sine partials as [frequency multiplier, peak, decay seconds].
+  function partials(ac, freq, t, list, attack = 0.002) {
+    list.forEach(([mult, peak, decay]) => {
+      const osc = ac.createOscillator();
+      osc.frequency.value = freq * mult;
+      osc.connect(env(ac, t, peak, attack, t + decay));
+      osc.start(t);
+      osc.stop(t + decay);
+    });
+  }
+
+  // Xylophone: a wooden bar hit by a mallet, short and bright, with a little click.
+  function xylophone(ac, freq, t) {
+    partials(ac, freq * 2, t, [[1, 0.45, 0.5], [3, 0.12, 0.1]]);
+    noiseSource(ac, t, 0.01).connect(filter(ac, "highpass", 3000)).connect(env(ac, t, 0.12, 0.001, t + 0.01));
+  }
+
+  // Music box: tiny high bells, two slightly detuned for shimmer, ringing a long time.
+  function musicBox(ac, freq, t) {
+    partials(ac, freq * 2, t, [[1, 0.25, 2.5], [1.003, 0.12, 2.2], [5.4, 0.03, 0.2]]);
+  }
+
+  // Violin: bowed string, slow attack, warm tone with vibrato, held for the note's length.
+  function violin(ac, freq, t, dur) {
+    const { out, end } = held(ac, t, dur, 0.2, 0.12);
+    const osc = ac.createOscillator();
+    osc.type = "sawtooth";
+    osc.frequency.value = freq;
+    vibrato(ac, osc, t, end, 5.5, freq * 0.007, 0.3);
+    osc.connect(filter(ac, "lowpass", 2500, 0.7)).connect(out);
+    osc.start(t);
+    osc.stop(end);
+  }
+
+  // Trumpet: brassy tone that opens up bright, starts a touch flat, held for the note's length.
+  function trumpet(ac, freq, t, dur) {
+    const { out, end } = held(ac, t, dur, 0.18, 0.03);
+    const osc = ac.createOscillator();
+    osc.type = "sawtooth";
+    osc.frequency.setValueAtTime(freq * 0.97, t);
+    osc.frequency.exponentialRampToValueAtTime(freq, t + 0.05);
+    vibrato(ac, osc, t, end, 5, freq * 0.004, 0.35);
+    const f = filter(ac, "lowpass", 800, 2);
+    f.frequency.setValueAtTime(800, t);
+    f.frequency.exponentialRampToValueAtTime(3000, t + 0.05);
+    f.frequency.exponentialRampToValueAtTime(2000, t + 0.3);
+    osc.connect(f).connect(out);
+    osc.start(t);
+    osc.stop(end);
+  }
+
+  // Animals: each tile is a silly synthesized animal noise.
+  function animal(ac, i, t) {
+    // One sound: an oscillator gliding through [offset, Hz] points, through a chain of nodes.
+    const voice = (type, start, dur, glide, peak, chain = []) => {
+      const osc = ac.createOscillator();
+      const t0 = t + start;
+      osc.type = type;
+      osc.frequency.setValueAtTime(glide[0][1], t0);
+      glide.slice(1).forEach(([o, f]) => osc.frequency.exponentialRampToValueAtTime(f, t0 + o));
+      [osc, ...chain].reduce((a, b) => a.connect(b)).connect(env(ac, t0, peak, 0.02, t0 + dur));
+      osc.start(t0);
+      osc.stop(t0 + dur);
+      return osc;
+    };
+    // Pulses the volume `rate` times per second (croak, bleat).
+    const tremolo = (rate, dur) => {
+      const am = ac.createGain();
+      const lfo = ac.createOscillator();
+      const depth = ac.createGain();
+      am.gain.value = 0.5;
+      depth.gain.value = 0.5;
+      lfo.type = "square";
+      lfo.frequency.value = rate;
+      lfo.connect(depth).connect(am.gain);
+      lfo.start(t);
+      lfo.stop(t + dur);
+      return am;
+    };
+
+    switch (i) {
+      case 0: // oiseau: three quick chirps
+        [0, 0.12, 0.24].forEach((o) => voice("sine", o, 0.09, [[0, 2500], [0.07, 4200]], 0.25));
+        break;
+      case 1: // chat: "miaou"
+        voice("sawtooth", 0, 0.7, [[0, 450], [0.25, 800], [0.7, 420]], 0.3, [filter(ac, "bandpass", 1200, 1.5)]);
+        break;
+      case 2: // chien: "wouf wouf"
+        [0, 0.22].forEach((o) => voice("sawtooth", o, 0.14, [[0, 380], [0.14, 180]], 0.5, [filter(ac, "lowpass", 1400)]));
+        break;
+      case 3: { // vache: "meuh"
+        const f = filter(ac, "lowpass", 300);
+        f.frequency.setValueAtTime(300, t);
+        f.frequency.linearRampToValueAtTime(1200, t + 0.4);
+        f.frequency.linearRampToValueAtTime(400, t + 1.1);
+        voice("sawtooth", 0, 1.1, [[0, 150], [0.3, 165], [1.1, 110]], 0.45, [f]);
+        break;
+      }
+      case 4: // canard: "coin coin"
+        [0, 0.2].forEach((o) => voice("square", o, 0.13, [[0, 700], [0.13, 500]], 0.2, [filter(ac, "bandpass", 1300, 4)]));
+        break;
+      case 5: // grenouille: "croâ croâ"
+        [0, 0.35].forEach((o) =>
+          voice("square", o, 0.22, [[0, 140], [0.22, 110]], 0.3, [filter(ac, "lowpass", 900), tremolo(28, 0.6)])
+        );
+        break;
+      case 6: // mouton: "bêê"
+        voice("sawtooth", 0, 0.8, [[0, 380], [0.8, 340]], 0.3, [filter(ac, "bandpass", 1000), tremolo(7, 0.8)]);
+        break;
+      case 7: { // abeille: "bzzz"
+        const osc = voice("sawtooth", 0, 1, [[0, 210], [1, 230]], 0.15, [filter(ac, "lowpass", 1500)]);
+        vibrato(ac, osc, t, t + 1, 12, 15, 0.01);
+        break;
+      }
+    }
+  }
+
+  // Each instrument plays tile `i` (frequency `f`) at time `t`; held ones use the note length `d`.
+  // Instruments with `labels` show those on the tiles instead of the note names.
   const INSTRUMENTS = {
-    piano: { label: "piano" },
-    guitare: { label: "guitare" },
-    flute: { label: "flûte" },
-    batterie: { label: "batterie" },
+    piano:     { label: "piano",           play: (ac, i, f, t) => piano(ac, f, t) },
+    guitare:   { label: "guitare",         play: (ac, i, f, t) => guitar(ac, f, t) },
+    flute:     { label: "flûte",           play: (ac, i, f, t, d) => flute(ac, f, t, d) },
+    violon:    { label: "violon",          play: (ac, i, f, t, d) => violin(ac, f, t, d) },
+    trompette: { label: "trompette",       play: (ac, i, f, t, d) => trumpet(ac, f, t, d) },
+    xylophone: { label: "xylophone",       play: (ac, i, f, t) => xylophone(ac, f, t) },
+    boite:     { label: "boîte à musique", play: (ac, i, f, t) => musicBox(ac, f, t) },
+    batterie: {
+      label: "batterie",
+      play: (ac, i, f, t) => drum(ac, i, t),
+      labels: ["grosse caisse", "caisse claire", "charley", "charley ouvert", "tom grave", "tom aigu", "clap", "cymbale"],
+    },
+    animaux: {
+      label: "animaux",
+      play: (ac, i, f, t) => animal(ac, i, t),
+      labels: ["🐦\noiseau", "🐱\nchat", "🐶\nchien", "🐮\nvache", "🦆\ncanard", "🐸\ngrenouille", "🐑\nmouton", "🐝\nabeille"],
+    },
   };
-  const DRUMS = ["grosse caisse", "caisse claire", "charley", "charley ouvert", "tom grave", "tom aigu", "clap", "cymbale"];
   let instrument = "piano";
 
   // Play tile `i` with the current instrument, now or at audio time `when`.
   function play(i, when, dur = 0.6) {
     const ac = audio();
-    const t = when ?? ac.currentTime;
-    const freq = NOTES[i].freq;
-    if (instrument === "guitare") guitar(ac, freq, t);
-    else if (instrument === "flute") flute(ac, freq, t, dur);
-    else if (instrument === "batterie") drum(ac, i, t);
-    else piano(ac, freq, t);
+    INSTRUMENTS[instrument].play(ac, i, NOTES[i].freq, when ?? ac.currentTime, dur);
   }
 
   const tiles = NOTES.map((n, i) => {
@@ -389,9 +541,13 @@
 
   function setInstrument(name) {
     instrument = name;
-    document.body.classList.toggle("drums", name === "batterie");
+    const labels = INSTRUMENTS[name].labels;
+    document.body.classList.toggle("labeled", !!labels);
     tiles.forEach((el, i) => {
-      el.querySelector(".note").textContent = name === "batterie" ? DRUMS[i] : NOTES[i].name;
+      const note = el.querySelector(".note");
+      const [emoji, text] = labels?.[i].includes("\n") ? labels[i].split("\n") : [null, labels?.[i] ?? NOTES[i].name];
+      note.textContent = text;
+      if (emoji) note.insertAdjacentHTML("afterbegin", `<span class="emoji">${emoji}</span>`);
     });
   }
 

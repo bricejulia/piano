@@ -15,7 +15,7 @@ Open `index.html` in any modern browser. Nothing to install, no build step, no a
 ## What it does
 
 - **8 tiles**, from *do* to the next *do*. Click or tap them, or use the keyboard.
-- **4 instruments**: piano, guitare, flûte and batterie (each tile becomes a drum).
+- **9 instruments**: piano, guitare, flûte, violon, trompette, xylophone, boîte à musique, batterie (each tile becomes a drum) and animaux (each tile becomes an animal: oiseau, chat, chien, vache, canard, grenouille, mouton, abeille).
 - **Metronome** with adjustable tempo and 2/4, 3/4, 4/4 or 6/4 time.
 - **Rhythm timeline**: pick a song and its notes fall down their tile's column. Play each one when it reaches the line; a long block means a long note.
   - **♪ écouter**: the piano plays the song by itself, so you can hear how it goes.
