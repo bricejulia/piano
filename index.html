@@ -2,7 +2,16 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#111111">
+<!-- Added to the home screen, it opens full screen like an app. -->
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Piano">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-180.png">
 <title>Piano</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -12,6 +21,8 @@
     font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
     user-select: none;
     -webkit-user-select: none;
+    -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent;
     touch-action: none;
   }
   .tile {
@@ -49,68 +60,75 @@
     letter-spacing: 0.1em;
   }
 
-  /* Metronome */
+  /* Control bar: three pills (metronome, song, instrument) that wrap as whole groups. */
   .metro {
     position: fixed;
-    top: 1.25rem;
-    left: 50%;
-    transform: translateX(-50%);
+    top: max(12px, env(safe-area-inset-top));
+    left: max(16px, env(safe-area-inset-left));
+    right: max(16px, env(safe-area-inset-right));
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
+    pointer-events: none;
+    z-index: 10;
+  }
+  .group {
     display: flex;
     align-items: center;
-    gap: 0.9rem;
-    padding: 0.5rem 0.9rem;
+    gap: 4px;
+    padding: 4px 8px;
     border-radius: 999px;
     background: rgba(0, 0, 0, 0.35);
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
     color: #fff;
-    font-size: 0.85rem;
-    z-index: 10;
+    font-size: 16px; /* 16px+ stops iOS from zooming in when a menu is tapped */
+    pointer-events: auto;
   }
-  .metro button {
-    background: none;
-    border: none;
-    color: inherit;
-    font: inherit;
-    cursor: pointer;
-    min-width: 1.8rem;
-    height: 1.8rem;
-    border-radius: 999px;
-    opacity: 0.8;
-  }
-  .metro button:hover { opacity: 1; background: rgba(255, 255, 255, 0.12); }
-  .metro .play { font-size: 0.9rem; }
-  .metro .bpm {
-    font-variant-numeric: tabular-nums;
-    min-width: 4.2rem;
-    text-align: center;
-    letter-spacing: 0.05em;
-  }
-  .metro .bpm small { opacity: 0.55; font-size: 0.7rem; margin-left: 0.2rem; }
-  .dots { display: flex; gap: 0.4rem; }
-  .dot {
-    width: 0.5rem;
-    height: 0.5rem;
-    border-radius: 50%;
-    background: rgba(255, 255, 255, 0.25);
-    transition: background 0.15s, transform 0.15s;
-  }
-  .dot.on { background: #fff; transform: scale(1.35); transition: none; }
-  .dot.accent.on { background: #fff; transform: scale(1.7); }
-  .metro { flex-wrap: wrap; justify-content: center; max-width: calc(100% - 32px); }
-  .sep { width: 1px; height: 1.1rem; background: rgba(255, 255, 255, 0.25); }
+  /* 44px touch targets, the size Apple and Google recommend for fingers. */
+  .metro button,
   .metro select {
     background: none;
     border: none;
     color: inherit;
     font: inherit;
     cursor: pointer;
+    min-width: 44px;
+    height: 44px;
+    border-radius: 999px;
     opacity: 0.85;
     outline: none;
+    -webkit-tap-highlight-color: transparent;
   }
+  .metro select { padding: 0 12px; }
   .metro select option { background: #222; color: #fff; }
-  .metro .listen, .metro .practice { padding: 0 0.6rem; }
-  .metro .on { background: rgba(255, 255, 255, 0.2); opacity: 1; }
+  .metro button:active { background: rgba(255, 255, 255, 0.2); }
+  @media (hover: hover) {
+    .metro button:hover, .metro select:hover { opacity: 1; background: rgba(255, 255, 255, 0.12); }
+  }
+  .metro .play, .metro .minus, .metro .plus { font-size: 20px; }
+  .metro .bpm {
+    font-variant-numeric: tabular-nums;
+    min-width: 4.6rem;
+    text-align: center;
+  }
+  .metro .bpm small { opacity: 0.55; font-size: 12px; margin-left: 3px; }
+  .dots { display: flex; gap: 6px; padding: 0 6px; }
+  .dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.25);
+    transition: background 0.15s, transform 0.15s;
+  }
+  .dot.on { background: #fff; transform: scale(1.3); transition: none; }
+  .dot.accent.on { background: #fff; transform: scale(1.6); }
+  .metro .listen, .metro .practice { padding: 0 14px; }
+  .metro .on { background: rgba(255, 255, 255, 0.22); opacity: 1; }
+  .metro .fullscreen { font-size: 20px; }
+  /* Touch devices go full screen on every tap, so the button is only for computers. */
+  @media (pointer: coarse) { .metro .fullscreen { display: none; } }
   .timeline { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 5; }
   .score {
     position: fixed;
@@ -140,18 +158,23 @@
 </head>
 <body>
 <div class="metro">
-  <button class="play" title="Start / stop (space)">▶</button>
-  <button class="minus" title="Slower (↓)">−</button>
-  <span class="bpm"><span class="bpm-val">90</span><small>bpm</small></span>
-  <button class="plus" title="Faster (↑)">+</button>
-  <div class="dots"></div>
-  <button class="sig" title="Beats per bar">4/4</button>
-  <span class="sep"></span>
-  <select class="song" title="Demo song"></select>
-  <button class="listen" title="Écouter la chanson (Esc pour arrêter)">♪ écouter</button>
-  <button class="practice" title="Jouer la chanson en rythme (Esc pour arrêter)">★ jouer</button>
-  <span class="sep"></span>
-  <select class="instrument" title="Instrument"></select>
+  <div class="group">
+    <button class="play" title="Start / stop (space)">▶</button>
+    <button class="minus" title="Slower (↓)">−</button>
+    <span class="bpm"><span class="bpm-val">90</span><small>bpm</small></span>
+    <button class="plus" title="Faster (↑)">+</button>
+    <div class="dots"></div>
+    <button class="sig" title="Beats per bar">4/4</button>
+  </div>
+  <div class="group">
+    <select class="song" title="Chanson"></select>
+    <button class="listen" title="Écouter la chanson (Esc pour arrêter)">♪ écouter</button>
+    <button class="practice" title="Jouer la chanson en rythme (Esc pour arrêter)">★ jouer</button>
+  </div>
+  <div class="group">
+    <select class="instrument" title="Instrument"></select>
+    <button class="fullscreen" title="Plein écran">⛶</button>
+  </div>
 </div>
 <canvas class="timeline" hidden></canvas>
 <div class="score"></div>
@@ -621,8 +644,10 @@
 
     const now = ctx.currentTime;
     const beat = beatAt(now);
-    const hitY = H * 0.62;
-    const ppb = hitY / LOOKAHEAD;
+    // Notes fall from just under the control bar (which may wrap to two rows) to the line.
+    const topY = $(".metro").getBoundingClientRect().bottom + 8;
+    const hitY = Math.max(H * 0.62, topY + 120);
+    const ppb = (hitY - topY) / LOOKAHEAD;
     const col = W / NOTES.length;
 
     if (song.mode === "practice") {
@@ -633,7 +658,7 @@
 
     g.save();
     g.beginPath();
-    g.rect(0, 0, W, hitY);
+    g.rect(0, topY, W, hitY - topY);
     g.clip();
 
     // Faint bar lines help read the rhythm.
@@ -646,7 +671,7 @@
     for (const n of song.notes) {
       const bottom = hitY - (n.start - beat) * ppb;
       const top = bottom - n.beats * ppb + 4;
-      if (bottom < 0 || top > hitY) continue;
+      if (bottom < topY || top > hitY) continue;
       const x = n.i * col + col * 0.18;
       const w = col * 0.64;
       g.fillStyle = n.missed ? "rgba(255, 255, 255, 0.3)" : "rgba(255, 255, 255, 0.9)";
@@ -754,6 +779,39 @@
     setInstrument(instSel.value);
     instSel.blur();
   });
+
+  // ---- Full screen ----
+  // Browsers only allow full screen right after a tap or key press, so on
+  // touch devices every tap puts it back if it was left.
+  const fsBtn = $(".metro .fullscreen");
+  const root = document.documentElement;
+  const canFull = !!(root.requestFullscreen || root.webkitRequestFullscreen);
+  const isFull = () => !!(document.fullscreenElement || document.webkitFullscreenElement);
+
+  function enterFull() {
+    if (!canFull || isFull()) return;
+    const req = root.requestFullscreen
+      ? root.requestFullscreen({ navigationUI: "hide" })
+      : root.webkitRequestFullscreen();
+    Promise.resolve(req)
+      .then(() => screen.orientation?.lock?.("landscape"))
+      .catch(() => {});
+  }
+
+  function exitFull() {
+    if (document.exitFullscreen) document.exitFullscreen();
+    else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+  }
+
+  if (!canFull) fsBtn.hidden = true;
+  fsBtn.addEventListener("click", () => (isFull() ? exitFull() : enterFull()));
+  const syncFsBtn = () => fsBtn.classList.toggle("on", isFull());
+  document.addEventListener("fullscreenchange", syncFsBtn);
+  document.addEventListener("webkitfullscreenchange", syncFsBtn);
+  // pointerup (not pointerdown) counts as a user gesture for touch input.
+  if (matchMedia("(pointer: coarse)").matches) {
+    document.addEventListener("pointerup", enterFull, true);
+  }
 </script>
 </body>
 </html>
