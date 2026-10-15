@@ -154,6 +154,25 @@
   .score b { font-size: 2rem; font-weight: 600; }
   .score span { font-size: 1rem; opacity: 0.85; }
   .drums .note { font-size: clamp(0.7rem, 1.8vw, 1.3rem); text-align: center; padding: 0 0.3rem; }
+
+  /* Touch screens: much bigger controls for small fingers, and no keyboard hints. */
+  @media (any-pointer: coarse) {
+    .metro { gap: 12px; }
+    .group { gap: 8px; padding: 8px 12px; font-size: 22px; }
+    .metro button, .metro select { min-width: 64px; height: 64px; }
+    .metro select { padding: 0 18px; }
+    .metro .play, .metro .minus, .metro .plus { font-size: 28px; }
+    .metro .bpm { min-width: 6rem; }
+    .metro .bpm small { font-size: 15px; }
+    .metro .listen, .metro .practice { padding: 0 20px; }
+    .dots { gap: 9px; padding: 0 8px; }
+    .dot { width: 13px; height: 13px; }
+    .key { display: none; }
+    .note { font-size: clamp(1.4rem, 4.5vw, 3.2rem); }
+    .drums .note { font-size: clamp(0.9rem, 2.2vw, 1.6rem); }
+    .score b { font-size: 3rem; }
+    .score span { font-size: 1.4rem; }
+  }
 </style>
 </head>
 <body>
